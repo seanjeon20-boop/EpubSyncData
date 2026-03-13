@@ -12,17 +12,22 @@ export interface EpubReaderRef {
     goPrev: () => void;
     changeTheme: (theme: 'light' | 'dark') => void;
     changeFontSize: (size: number) => void;
+    addHighlight: (color: string) => void;
 }
 
 export interface EpubLocationData {
     cfi: string;
     progress: number;
+    currentLocation: number;
+    totalLocations: number;
 }
 
 interface EpubReaderProps {
     bookUrl: string;
     initialCfi?: string | null;
     onLocationChange?: (location: EpubLocationData) => void;
+    onTextSelected?: (cfiRange: string) => void;
+    onAnnotation?: (data: any) => void;
     onReady?: (totalLocations: number) => void;
     theme?: 'light' | 'dark';
     fontSize?: number; // percentage, e.g., 100
@@ -32,6 +37,8 @@ const EpubReader = forwardRef<EpubReaderRef, EpubReaderProps>(({
     bookUrl,
     initialCfi,
     onLocationChange,
+    onTextSelected,
+    onAnnotation,
     onReady,
     theme = 'light',
     fontSize = 100
@@ -59,7 +66,8 @@ const EpubReader = forwardRef<EpubReaderRef, EpubReaderProps>(({
         goNext: () => executeScript(`window.goNext()`),
         goPrev: () => executeScript(`window.goPrev()`),
         changeTheme: (newTheme) => executeScript(`window.changeTheme("${newTheme}")`),
-        changeFontSize: (newSize) => executeScript(`window.changeFontSize(${newSize})`)
+        changeFontSize: (newSize) => executeScript(`window.changeFontSize(${newSize})`),
+        addHighlight: (color: string) => executeScript(`window.addHighlight("${color}")`),
     }));
 
     // Update theme and font size when props change, but only if webview is ready
@@ -76,12 +84,18 @@ const EpubReader = forwardRef<EpubReaderRef, EpubReaderProps>(({
             if (data.type === 'location' && onLocationChange) {
                 onLocationChange({
                     cfi: data.cfi,
-                    progress: data.progress || 0
+                    progress: data.progress || 0,
+                    currentLocation: data.currentLocation || 0,
+                    totalLocations: data.totalLocations || 0
                 });
             } else if (data.type === 'ready') {
                 setIsReady(true);
                 setLoading(false);
                 if (onReady) onReady(data.totalLocations);
+            } else if (data.type === 'textSelected' && onTextSelected) {
+                onTextSelected(data.cfiRange);
+            } else if (data.type === 'annotation' && onAnnotation) {
+                onAnnotation(data);
             }
         } catch (e) {
             // Ignore non-json or external messages

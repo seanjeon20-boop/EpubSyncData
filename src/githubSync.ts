@@ -29,6 +29,16 @@ export interface BookData {
     file_path: string;
     last_read_position: string | null;
     position_updated_at: string | null;
+    annotations?: Annotation[];
+}
+
+export interface Annotation {
+    type: 'highlight' | 'memo' | 'bookmark';
+    cfi: string;
+    cfiRange?: string; // For highlights and memos
+    text?: string;    // Selected text or memo content
+    color?: string;
+    created_at: string;
 }
 
 // Global cache to easily update the file without fetching it again
@@ -165,7 +175,25 @@ export async function updateBookProgress(title: string, cfi: string) {
 }
 
 /**
- * 5. 앱 구동 시 진입점 로직
+ * 5. 어노테이션(하이라이트, 메모, 책갈피) 추가
+ */
+export async function addAnnotation(title: string, annotation: Annotation) {
+    if (!cachedSyncData) return;
+
+    const bookKey = Object.keys(cachedSyncData.books).find(k => cachedSyncData!.books[k].title === title);
+    if (!bookKey) return;
+
+    const book = cachedSyncData.books[bookKey];
+    if (!book.annotations) book.annotations = [];
+
+    book.annotations.push(annotation);
+    cachedSyncData.last_synced_at = new Date().toISOString();
+
+    await pushSyncData(cachedSyncData);
+}
+
+/**
+ * 6. 앱 구동 시 진입점 로직
  */
 export async function initializeGitHubSync() {
     console.log('--- Initializing GitHub Sync ... ---');

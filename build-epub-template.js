@@ -85,14 +85,23 @@ async function buildTemplate() {
 
       window.rendition.on("relocated", function(location) {
         let progress = 0;
+        let currentLocation = 0;
+        let totalLocations = 0;
+
         if (window.book.locations && window.book.locations.length() > 0) {
             progress = window.book.locations.percentageFromCfi(location.start.cfi);
+            currentLocation = location.start.location;
+            totalLocations = window.book.locations.total;
         }
+
         const msg = JSON.stringify({
           type: 'location',
           cfi: location.start.cfi,
-          progress: progress
+          progress: progress,
+          currentLocation: currentLocation,
+          totalLocations: totalLocations
         });
+
         if (window.ReactNativeWebView) {
             window.ReactNativeWebView.postMessage(msg);
         } else {
@@ -100,7 +109,16 @@ async function buildTemplate() {
         }
       });
 
+      // 텍스트 선택(드래그) 이벤트 리스너 캐치
+      window.rendition.on("selected", function(cfiRange, contents) {
+          window.lastSelectedCfiRange = cfiRange;
+          const msg = JSON.stringify({ type: 'textSelected', cfiRange: cfiRange });
+          if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+          else window.parent.postMessage(msg, "*");
+      });
+
       window.book.ready.then(() => {
+        // 위치 렌더링에 적절한 값을 넣어 location(페이지 숫자)을 생성합니다.
         return window.book.locations.generate(1600);
       }).then((locations) => {
         const readyMsg = JSON.stringify({
@@ -113,6 +131,32 @@ async function buildTemplate() {
             window.parent.postMessage(readyMsg, "*");
         }
       });
+    };
+
+    window.addHighlight = function(color) {
+        if (window.lastSelectedCfiRange) {
+            window.rendition.annotations.highlight(window.lastSelectedCfiRange, {}, (e) => {
+                console.log("highlight clicked", e);
+            });
+            
+            // React Native 앱 쪽으로 하이라이트 정보 전송 (Memo 연동용)
+            const msg = JSON.stringify({
+                type: 'annotation',
+                action: 'highlight',
+                cfiRange: window.lastSelectedCfiRange,
+                color: color || 'yellow'
+            });
+            if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+            else window.parent.postMessage(msg, "*");
+
+            // 선택 해제
+            const contents = window.rendition.getContents();
+            if(contents && contents.length > 0) {
+                const selection = contents[0].window.getSelection();
+                if(selection && selection.removeAllRanges) selection.removeAllRanges();
+            }
+            window.lastSelectedCfiRange = null;
+        }
     };
 
     window.changeTheme = function(theme) {
