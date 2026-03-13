@@ -3,10 +3,12 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import LibraryScreen from '../screens/LibraryScreen';
 import ReaderScreen from '../screens/ReaderScreen';
+import AnnotationsScreen from '../screens/AnnotationsScreen';
 
 export type RootStackParamList = {
     Library: undefined;
     Reader: { bookUrl: string; title: string; lastReadPosition: string | null | undefined };
+    Annotations: { title: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -24,6 +26,11 @@ export default function AppNavigator() {
                     name="Reader"
                     component={ReaderScreen}
                     options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                    name="Annotations"
+                    component={AnnotationsScreen}
+                    options={{ title: 'Notes & Highlights' }}
                 />
             </Stack.Navigator>
         </NavigationContainer>

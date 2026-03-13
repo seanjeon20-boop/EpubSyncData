@@ -114,6 +114,9 @@ export default function ReaderScreen({ route, navigation }: Props) {
                     {title}
                 </Text>
                 <View style={styles.headerButtons}>
+                    <TouchableOpacity onPress={() => navigation.navigate('Annotations', { title })} style={styles.headerButton}>
+                        <Text style={[styles.controlText, theme === 'dark' && styles.textDark]}>📝</Text>
+                    </TouchableOpacity>
                     <TouchableOpacity onPress={handleAddBookmark} style={styles.headerButton}>
                         <Text style={[styles.controlText, theme === 'dark' && styles.textDark]}>🔖</Text>
                     </TouchableOpacity>

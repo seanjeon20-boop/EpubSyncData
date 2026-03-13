@@ -205,3 +205,18 @@ export async function initializeGitHubSync() {
 
     return { syncData, currentSha, booksOnCloud };
 }
+
+/**
+ * 7. 특정 책의 어노테이션 목록 가져오기
+ */
+export async function getAnnotations(title: string): Promise<Annotation[]> {
+    if (!cachedSyncData) {
+        await fetchSyncData();
+    }
+    if (!cachedSyncData) return [];
+
+    const bookKey = Object.keys(cachedSyncData.books).find(k => cachedSyncData!.books[k].title === title);
+    if (!bookKey) return [];
+
+    return cachedSyncData.books[bookKey].annotations || [];
+}
