@@ -4,11 +4,13 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import LibraryScreen from '../screens/LibraryScreen';
 import ReaderScreen from '../screens/ReaderScreen';
 import AnnotationsScreen from '../screens/AnnotationsScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 
 export type RootStackParamList = {
     Library: undefined;
     Reader: { bookUrl: string; title: string; lastReadPosition: string | null | undefined };
     Annotations: { title: string };
+    Settings: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -31,6 +33,11 @@ export default function AppNavigator() {
                     name="Annotations"
                     component={AnnotationsScreen}
                     options={{ title: 'Notes & Highlights' }}
+                />
+                <Stack.Screen
+                    name="Settings"
+                    component={SettingsScreen}
+                    options={{ title: 'Sync Settings' }}
                 />
             </Stack.Navigator>
         </NavigationContainer>

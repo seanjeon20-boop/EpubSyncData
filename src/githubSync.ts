@@ -1,22 +1,32 @@
-/**
- * src/utils/githubSync.ts
- * 앱 구동 시 GitHub에서 파일을 리스트업하고,
- * 선택한 책의 마지막 읽기 위치를 불러오는 초기화 로직 (React Native)
- */
-
 import { decode, encode } from 'base-64';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const GITHUB_TOKEN = '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';
-const REPO_OWNER = 'seanjeon20-boop';
-const REPO_NAME = 'EpubSyncData';
+let GITHUB_TOKEN = '';
+let REPO_OWNER = '';
+let REPO_NAME = '';
 const SYNC_FILE_PATH = 'data/sync.json';
 
-const BASE_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
+/**
+ * 저장된 GitHub 설정 불러오기
+ */
+export async function loadSyncConfig() {
+    const token = await AsyncStorage.getItem('github_token');
+    const owner = await AsyncStorage.getItem('github_owner');
+    const name = await AsyncStorage.getItem('github_repo');
 
-const headers = {
+    if (token) GITHUB_TOKEN = token;
+    if (owner) REPO_OWNER = owner;
+    if (name) REPO_NAME = name;
+
+    return !!(GITHUB_TOKEN && REPO_OWNER && REPO_NAME);
+}
+
+const getBaseUrl = () => `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
+
+const getHeaders = () => ({
     Authorization: `token ${GITHUB_TOKEN}`,
     Accept: 'application/vnd.github.v3+json',
-};
+});
 
 export interface SyncData {
     version: string;
@@ -50,9 +60,9 @@ let cachedSha: string | null = null;
  */
 export async function fetchBooksList(): Promise<any[]> {
     try {
-        const response = await fetch(`${BASE_URL}/contents/books`, {
+        const response = await fetch(`${getBaseUrl()}/contents/books`, {
             method: 'GET',
-            headers,
+            headers: getHeaders(),
         });
 
         if (response.status === 404) {
@@ -77,9 +87,9 @@ export async function fetchBooksList(): Promise<any[]> {
  */
 export async function fetchSyncData(): Promise<{ data: SyncData | null; sha: string | null }> {
     try {
-        const response = await fetch(`${BASE_URL}/contents/${SYNC_FILE_PATH}`, {
+        const response = await fetch(`${getBaseUrl()}/contents/${SYNC_FILE_PATH}`, {
             method: 'GET',
-            headers,
+            headers: getHeaders(),
         });
 
         if (response.status === 404) {
@@ -123,9 +133,9 @@ export async function pushSyncData(newData: SyncData): Promise<string | null> {
             sha: cachedSha || undefined, // 기존 파일을 덮어쓰기 위해 이전 작업의 sha 필요
         };
 
-        const response = await fetch(`${BASE_URL}/contents/${SYNC_FILE_PATH}`, {
+        const response = await fetch(`${getBaseUrl()}/contents/${SYNC_FILE_PATH}`, {
             method: 'PUT',
-            headers,
+            headers: getHeaders(),
             body: JSON.stringify(body),
         });
 

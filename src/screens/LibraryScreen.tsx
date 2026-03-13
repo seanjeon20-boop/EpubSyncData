@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import { initializeGitHubSync, BookData } from '../githubSync';
+import { initializeGitHubSync, loadSyncConfig, BookData } from '../githubSync';
+import { useFocusEffect } from '@react-navigation/native';
 
 type LibraryScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Library'>;
 
@@ -15,21 +16,32 @@ export default function LibraryScreen({ navigation }: Props) {
     const [syncData, setSyncData] = useState<any>(null);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        async function loadData() {
-            setLoading(true);
-            try {
-                const result = await initializeGitHubSync();
-                setSyncData(result.syncData);
-                setBooks(result.booksOnCloud || []);
-            } catch (e) {
-                console.error("Failed to load library data:", e);
-            } finally {
-                setLoading(false);
+    const [configReady, setConfigReady] = useState(false);
+
+    useFocusEffect(
+        React.useCallback(() => {
+            async function loadData() {
+                const isConfigured = await loadSyncConfig();
+                setConfigReady(isConfigured);
+
+                if (isConfigured) {
+                    setLoading(true);
+                    try {
+                        const result = await initializeGitHubSync();
+                        setSyncData(result.syncData);
+                        setBooks(result.booksOnCloud || []);
+                    } catch (e) {
+                        console.error("Failed to load library data:", e);
+                    } finally {
+                        setLoading(false);
+                    }
+                } else {
+                    setLoading(false);
+                }
             }
-        }
-        loadData();
-    }, []);
+            loadData();
+        }, [])
+    );
 
     const handleBookPress = (bookFile: any) => {
         // In a real app, you'd match the book file to the syncData 
@@ -64,8 +76,24 @@ export default function LibraryScreen({ navigation }: Props) {
 
     return (
         <View style={styles.container}>
-            <Text style={styles.header}>My Library</Text>
-            {books.length === 0 ? (
+            <View style={styles.headerRow}>
+                <Text style={styles.header}>My Library</Text>
+                <TouchableOpacity onPress={() => navigation.navigate('Settings')}>
+                    <Text style={styles.settingsIcon}>⚙️ Settings</Text>
+                </TouchableOpacity>
+            </View>
+
+            {!configReady ? (
+                <View style={styles.noConfig}>
+                    <Text style={styles.noConfigTitle}>Welcome to EpubSync!</Text>
+                    <Text style={styles.noConfigText}>
+                        Cloud sync is not configured yet. Set up your GitHub credentials to view your books.
+                    </Text>
+                    <TouchableOpacity style={styles.configBtn} onPress={() => navigation.navigate('Settings')}>
+                        <Text style={styles.configBtnText}>Setup GitHub Sync</Text>
+                    </TouchableOpacity>
+                </View>
+            ) : books.length === 0 ? (
                 <Text style={styles.emptyText}>No books found in GitHub /books folder.</Text>
             ) : (
                 <FlatList
@@ -125,5 +153,42 @@ const styles = StyleSheet.create({
         color: '#777',
         textAlign: 'center',
         marginTop: 40,
+    },
+    headerRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    settingsIcon: {
+        fontSize: 16,
+        color: '#007aff',
+    },
+    noConfig: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 30,
+    },
+    noConfigTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        marginBottom: 10,
+    },
+    noConfigText: {
+        textAlign: 'center',
+        color: '#666',
+        marginBottom: 30,
+        lineHeight: 22,
+    },
+    configBtn: {
+        backgroundColor: '#007aff',
+        paddingVertical: 12,
+        paddingHorizontal: 24,
+        borderRadius: 8,
+    },
+    configBtnText: {
+        color: '#fff',
+        fontWeight: 'bold',
     }
 });
