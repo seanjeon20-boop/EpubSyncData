@@ -8,9 +8,9 @@
 // React Native 에서는 외부 base-64 라이브러리 사용 권장 (npm install base-64, @types/base-64)
 import { decode } from 'base-64';
 
-export const GITHUB_TOKEN = 'YOUR_GITHUB_ACCESS_TOKEN'; // 사용자 설정 등 SecureStore에서 가져옴
-const REPO_OWNER = 'YOUR_GITHUB_USERNAME';
-const REPO_NAME = 'YOUR_SYNC_REPO_NAME';
+export const GITHUB_TOKEN = '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';
+const REPO_OWNER = 'seanjeon20-boop';
+const REPO_NAME = 'EpubSyncData';
 const SYNC_FILE_PATH = 'data/sync.json';
 
 const BASE_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
