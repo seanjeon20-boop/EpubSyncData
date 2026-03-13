@@ -5,6 +5,7 @@ import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import EpubReader, { EpubReaderRef, EpubLocationData } from '../components/EpubReader';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { updateBookProgress } from '../githubSync';
 
 type ReaderScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Reader'>;
 type ReaderScreenRouteProp = RouteProp<RootStackParamList, 'Reader'>;
@@ -35,11 +36,13 @@ export default function ReaderScreen({ route, navigation }: Props) {
 
         saveTimerRef.current = setTimeout(async () => {
             try {
-                // 특정 책의 마지막 위치를 로컬 스토리지에 저장 (나중에 githubSync.ts 연동)
-                // 키워드는 책의 고유 식별자(여기서는 파일명 혹은 title)를 활용합니다.
+                // 특정 책의 마지막 위치를 로컬 스토리지에 저장 (빠른 로딩 및 오프라인 대비용)
                 const key = `book_cfi_${encodeURIComponent(title)}`;
                 await AsyncStorage.setItem(key, loc.cfi);
                 console.log(`[AutoSave] Saved CFI to local storage: ${loc.cfi} (${Math.round(loc.progress * 100)}%)`);
+
+                // GitHub 원격 서버로 읽던 위치 백업(Push)
+                await updateBookProgress(title, loc.cfi);
             } catch (e) {
                 console.error('Failed to save reading position', e);
             }

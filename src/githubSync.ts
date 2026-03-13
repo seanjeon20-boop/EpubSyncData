@@ -4,9 +4,7 @@
  * 선택한 책의 마지막 읽기 위치를 불러오는 초기화 로직 (React Native)
  */
 
-// GitHub API 응답의 content (Base64) 디코딩 용도
-// React Native 에서는 외부 base-64 라이브러리 사용 권장 (npm install base-64, @types/base-64)
-import { decode } from 'base-64';
+import { decode, encode } from 'base-64';
 
 export const GITHUB_TOKEN = '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';
 const REPO_OWNER = 'seanjeon20-boop';
@@ -31,8 +29,11 @@ export interface BookData {
     file_path: string;
     last_read_position: string | null;
     position_updated_at: string | null;
-    // 주석 등 다른 속성들 위치
 }
+
+// Global cache to easily update the file without fetching it again
+let cachedSyncData: SyncData | null = null;
+let cachedSha: string | null = null;
 
 /**
  * 1. 앱 구동 시 GitHub의 /books 디렉토리 내 폴더 리스팅 혹은 책 파일 리스트업
@@ -63,7 +64,6 @@ export async function fetchBooksList(): Promise<any[]> {
 
 /**
  * 2. 동기화 데이터 최초 초기화
- * 저장된 sync.json 불러오고, 마지막 읽을 위치 등을 확보. sha 정보 저장 중요 (동시성 제어용)
  */
 export async function fetchSyncData(): Promise<{ data: SyncData | null; sha: string | null }> {
     try {
@@ -74,7 +74,6 @@ export async function fetchSyncData(): Promise<{ data: SyncData | null; sha: str
 
         if (response.status === 404) {
             console.log('Sync file not found. Need initialization for the first time.');
-            // 새 JSON을 만들어 Push 로직으로 넘어갈 수 있도록 처리
             return { data: null, sha: null };
         }
 
@@ -83,14 +82,12 @@ export async function fetchSyncData(): Promise<{ data: SyncData | null; sha: str
         }
 
         const result = await response.json();
-
-        // GitHub API에서 JSON 파일 내용은 base64 문자열로 줍니다. 디코딩 필수.
-        // React Native는 atob 가 없어서 base-64 등 툴체인 사용
         const decodedContent = decode(result.content);
-
-        // 이스케이프 문자열 파싱 (UTF-8 고려)
         const utf8Content = decodeURIComponent(escape(decodedContent));
         const syncData: SyncData = JSON.parse(utf8Content);
+
+        cachedSyncData = syncData;
+        cachedSha = result.sha;
 
         return { data: syncData, sha: result.sha };
     } catch (error) {
@@ -100,34 +97,83 @@ export async function fetchSyncData(): Promise<{ data: SyncData | null; sha: str
 }
 
 /**
- * 3. 앱 구동 시 진입점 로직 (App.tsx 혹은 초기화 Context 에서 호출)
+ * 3. 동기화 데이터 쓰기(Push)
+ */
+export async function pushSyncData(newData: SyncData): Promise<string | null> {
+    try {
+        // UTF-8 문자열을 Base64 인코딩
+        const jsonString = JSON.stringify(newData, null, 2);
+        // encodeURIComponent + unescape is a standard way to encode UTF-8 bytes to btoa/base-64
+        const utf8Bytes = unescape(encodeURIComponent(jsonString));
+        const encodedContent = encode(utf8Bytes);
+
+        const body = {
+            message: `sync: update reading position ${new Date().toISOString()}`,
+            content: encodedContent,
+            sha: cachedSha || undefined, // 기존 파일을 덮어쓰기 위해 이전 작업의 sha 필요
+        };
+
+        const response = await fetch(`${BASE_URL}/contents/${SYNC_FILE_PATH}`, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            const errResult = await response.json();
+            throw new Error(`Failed to push sync data: ${response.status} - ${errResult.message}`);
+        }
+
+        const result = await response.json();
+        console.log('✅ 성공적으로 GitHub에 동기화 백업되었습니다!');
+        cachedSha = result.content.sha;
+        cachedSyncData = newData;
+        return result.content.sha;
+    } catch (error) {
+        console.error('Error pushing sync.json to GitHub:', error);
+        return null;
+    }
+}
+
+/**
+ * 4. 특정 책의 읽은 위치를 업데이트하고 GitHub에 예약/바로 푸시
+ */
+export async function updateBookProgress(title: string, cfi: string) {
+    if (!cachedSyncData) return;
+
+    // 제목으로 책 찾기 (더 정밀하게는 id를 쓰는 것이 좋지만, 파일명 베이스로 탐색)
+    const bookKey = Object.keys(cachedSyncData.books).find(k => cachedSyncData!.books[k].title === title);
+
+    // 만약 데이터에 없는 새 책이라면 새로 추가
+    if (!bookKey) {
+        const dummyKey = `book_${Date.now()}`;
+        cachedSyncData.books[dummyKey] = {
+            title: title,
+            file_path: `books/${title}.epub`,
+            last_read_position: cfi,
+            position_updated_at: new Date().toISOString()
+        };
+    } else {
+        cachedSyncData.books[bookKey].last_read_position = cfi;
+        cachedSyncData.books[bookKey].position_updated_at = new Date().toISOString();
+    }
+
+    cachedSyncData.last_synced_at = new Date().toISOString();
+
+    // 서버로 전송
+    await pushSyncData(cachedSyncData);
+}
+
+/**
+ * 5. 앱 구동 시 진입점 로직
  */
 export async function initializeGitHubSync() {
     console.log('--- Initializing GitHub Sync ... ---');
 
-    // 1. 책 리스트 파일 확인
     const booksOnCloud = await fetchBooksList();
     console.log('총 발견된 책(EPUB):', booksOnCloud.length, '권');
 
-    // 2. 동기화 데이터 가져오기  
     const { data: syncData, sha: currentSha } = await fetchSyncData();
-
-    // 로컬 기기에 `currentSha`를 보관해두었다가 파일 수정(Push) 시 활용!
-    // await AsyncStorage.setItem('sync_file_sha', currentSha || ''); 
-
-    // 3. 특정 책의 마지막 위치 정보 렌더링 준비
-    const targetBookId = 'book_hash_identifier123'; // 예제 책 선택 시 값
-    if (syncData && syncData.books[targetBookId]) {
-        const bookInfo = syncData.books[targetBookId];
-        console.log(`\n📚 [${bookInfo.title}] 동기화 완료!`);
-        console.log(`📌 마지막 읽기 위치(CFI): ${bookInfo.last_read_position}`);
-        console.log(`⏱️ 최신 위치 갱신일: ${bookInfo.position_updated_at}`);
-
-        // epubjs 라이브러리에 렌더링 호출을 예약 (컴포넌트 props로 넘기기 등)
-        // 예) readerView.display(bookInfo.last_read_position)
-    } else {
-        console.log('\n📖 이 책의 동기화 데이터가 없습니다. (처음부터 읽기)');
-    }
 
     return { syncData, currentSha, booksOnCloud };
 }
