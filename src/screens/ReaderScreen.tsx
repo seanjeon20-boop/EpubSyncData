@@ -1,12 +1,12 @@
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, SafeAreaView, Platform } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import EpubReader, { EpubReaderRef, EpubLocationData } from '../components/EpubReader';
+import EpubReader, { EpubReaderRef, EpubLocationData, TocItem } from '../components/EpubReader';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { updateBookProgress, addAnnotation } from '../githubSync';
-import { Modal, TextInput, ScrollView } from 'react-native';
+import { updateBookProgress, addAnnotation, updateReadingStats, loadSyncConfig } from '../githubSync';
+import { Modal, TextInput, FlatList, ActivityIndicator } from 'react-native';
 
 type ReaderScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Reader'>;
 type ReaderScreenRouteProp = RouteProp<RootStackParamList, 'Reader'>;
@@ -27,10 +27,71 @@ export default function ReaderScreen({ route, navigation }: Props) {
     const [currentCfi, setCurrentCfi] = useState('');
     const [selectedRange, setSelectedRange] = useState<string | null>(null);
     const [memoModalVisible, setMemoModalVisible] = useState(false);
+    const [tocModalVisible, setTocModalVisible] = useState(false);
     const [tempMemo, setTempMemo] = useState('');
+    const [toc, setToc] = useState<TocItem[]>([]);
+    const [initialPosition, setInitialPosition] = useState<string | null>(lastReadPosition || null);
+    const [isInitialLoad, setIsInitialLoad] = useState(true);
+    const [localBookUrl, setLocalBookUrl] = useState<string | null>(null);
+    const [cacheLoading, setCacheLoading] = useState(true);
 
     // 디바운스 저장을 위한 타이머 캐시
     const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const sessionStartRef = useRef<number>(Date.now());
+
+    // 독서 시간 측정 (1분마다 업데이트)
+    useEffect(() => {
+        async function ensureConfig() {
+            await loadSyncConfig();
+        }
+        ensureConfig();
+
+        const statsInterval = setInterval(() => {
+            const now = Date.now();
+            const diffMinutes = Math.floor((now - sessionStartRef.current) / 60000);
+            if (diffMinutes >= 1) {
+                updateReadingStats(diffMinutes);
+                sessionStartRef.current = now; // 리셋
+                console.log(`[Stats] Added ${diffMinutes} minutes to reading history.`);
+            }
+        }, 60000);
+
+        return () => {
+            clearInterval(statsInterval);
+            // 종료 시 남은 시간 (30초 이상이면 1분으로 침)
+            const finalDiff = Date.now() - sessionStartRef.current;
+            if (finalDiff > 30000) {
+                updateReadingStats(1);
+            }
+        };
+    }, []);
+
+    // 로컬 스토리지에서 마지막 읽던 위치 불러오기 (GitHub 싱크 데이터가 없을 때 백업용)
+    useEffect(() => {
+        async function loadLocalPosition() {
+            if (!lastReadPosition) {
+                try {
+                    const key = `book_cfi_${encodeURIComponent(title)}`;
+                    const localCfi = await AsyncStorage.getItem(key);
+                    if (localCfi) {
+                        console.log(`[Reader] Found local progress fallback for ${title}: ${localCfi}`);
+                        setInitialPosition(localCfi);
+                    }
+                } catch (e) {
+                    console.error('Failed to load local progress', e);
+                }
+            }
+            setIsInitialLoad(false);
+        }
+        loadLocalPosition();
+    }, [title, lastReadPosition]);
+
+    // 책 URL을 epub.js에 직접 전달 (public 저장소이므로 CORS 허용)
+    useEffect(() => {
+        setLocalBookUrl(bookUrl);
+        setCacheLoading(false);
+    }, [bookUrl]);
+
 
     const handleLocationChange = useCallback((loc: EpubLocationData) => {
         setProgress(loc.progress);
@@ -49,8 +110,8 @@ export default function ReaderScreen({ route, navigation }: Props) {
                 await AsyncStorage.setItem(key, loc.cfi);
                 console.log(`[AutoSave] Saved CFI to local storage: ${loc.cfi} (${Math.round(loc.progress * 100)}%)`);
 
-                // GitHub 원격 서버로 읽던 위치 백업(Push)
-                await updateBookProgress(title, loc.cfi);
+                // GitHub 원격 서버로 읽던 위치 백업(Push) + 마지막 읽은 책 정보 로컬 저장
+                await updateBookProgress(title, loc.cfi, bookUrl);
             } catch (e) {
                 console.error('Failed to save reading position', e);
             }
@@ -62,7 +123,12 @@ export default function ReaderScreen({ route, navigation }: Props) {
     };
 
     const toggleTheme = () => {
-        setTheme(prev => prev === 'light' ? 'dark' : 'light');
+        const newTheme = theme === 'light' ? 'dark' : 'light';
+        setTheme(newTheme);
+        // ref를 통해 즉시 WebView에도 적용 (state 업데이트 지연 대비)
+        setTimeout(() => {
+            readerRef.current?.changeTheme(newTheme);
+        }, 50);
     };
 
     const increaseFont = () => setFontSize(prev => prev + 10);
@@ -104,6 +170,11 @@ export default function ReaderScreen({ route, navigation }: Props) {
         setSelectedRange(null);
     };
 
+    const handleJumpTo = (href: string) => {
+        readerRef.current?.jumpTo(href);
+        setTocModalVisible(false);
+    };
+
     return (
         <SafeAreaView style={[styles.safeArea, theme === 'dark' && styles.safeAreaDark]}>
             <View style={[styles.headerBar, theme === 'dark' && styles.headerDark]}>
@@ -114,6 +185,9 @@ export default function ReaderScreen({ route, navigation }: Props) {
                     {title}
                 </Text>
                 <View style={styles.headerButtons}>
+                    <TouchableOpacity onPress={() => setTocModalVisible(true)} style={styles.headerButton}>
+                        <Text style={[styles.controlText, theme === 'dark' && styles.textDark]}>📑</Text>
+                    </TouchableOpacity>
                     <TouchableOpacity onPress={() => navigation.navigate('Annotations', { title })} style={styles.headerButton}>
                         <Text style={[styles.controlText, theme === 'dark' && styles.textDark]}>📝</Text>
                     </TouchableOpacity>
@@ -129,16 +203,30 @@ export default function ReaderScreen({ route, navigation }: Props) {
             </View>
 
             <View style={styles.readerContainer}>
-                <EpubReader
-                    ref={readerRef}
-                    bookUrl={bookUrl}
-                    initialCfi={lastReadPosition || undefined}
-                    onLocationChange={handleLocationChange}
-                    onTextSelected={setSelectedRange}
-                    onReady={handleReady}
-                    theme={theme}
-                    fontSize={fontSize}
-                />
+                {cacheLoading ? (
+                    <View style={styles.centered}>
+                        <ActivityIndicator size="large" color="#007AFF" />
+                        <Text style={{marginTop: 10, color: theme === 'dark' ? '#fff' : '#000'}}>
+                            Loading book...
+                        </Text>
+                    </View>
+                ) : (
+                    <View style={{ flex: 1 }}>
+                        {!isInitialLoad && localBookUrl && (
+                            <EpubReader
+                                ref={readerRef}
+                                bookUrl={localBookUrl}
+                                initialCfi={initialPosition}
+                                onLocationChange={handleLocationChange}
+                                onTextSelected={setSelectedRange}
+                                onToc={setToc}
+                                onReady={handleReady}
+                                theme={theme}
+                                fontSize={fontSize}
+                            />
+                        )}
+                    </View>
+                )}
             </View>
 
             {selectedRange && (
@@ -174,6 +262,34 @@ export default function ReaderScreen({ route, navigation }: Props) {
                                 <Text style={{ color: '#fff' }}>Save</Text>
                             </TouchableOpacity>
                         </View>
+                    </View>
+                </View>
+            </Modal>
+
+            <Modal visible={tocModalVisible} animationType="slide" transparent>
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, styles.tocContent, theme === 'dark' && styles.modalContentDark]}>
+                        <View style={styles.modalHeader}>
+                            <Text style={[styles.modalTitle, theme === 'dark' && styles.textDark]}>Table of Contents</Text>
+                            <TouchableOpacity onPress={() => setTocModalVisible(false)}>
+                                <Text style={styles.closeBtn}>✕</Text>
+                            </TouchableOpacity>
+                        </View>
+                        <FlatList
+                            data={toc}
+                            keyExtractor={(item, index) => `${index}-${item.href}`}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity 
+                                    style={styles.tocItem} 
+                                    onPress={() => handleJumpTo(item.href)}
+                                >
+                                    <Text style={[styles.tocLabel, theme === 'dark' && styles.textWhite]}>
+                                        {item.label.trim()}
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
+                            ItemSeparatorComponent={() => <View style={styles.separator} />}
+                        />
                     </View>
                 </View>
             </Modal>
@@ -353,5 +469,43 @@ const styles = StyleSheet.create({
     },
     saveBtn: {
         backgroundColor: '#007aff',
+    },
+    centered: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    tocContent: {
+        height: '80%',
+        paddingBottom: 0,
+    },
+    modalContentDark: {
+        backgroundColor: '#1a1a1a',
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 20,
+    },
+    closeBtn: {
+        fontSize: 24,
+        color: '#888',
+        padding: 5,
+    },
+    tocItem: {
+        paddingVertical: 15,
+        paddingHorizontal: 5,
+    },
+    tocLabel: {
+        fontSize: 16,
+        color: '#333',
+    },
+    textWhite: {
+        color: '#E0E0E0',
+    },
+    separator: {
+        height: 1,
+        backgroundColor: '#F0F0F0',
     }
 });

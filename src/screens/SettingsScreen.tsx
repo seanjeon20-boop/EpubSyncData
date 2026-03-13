@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, SafeAreaView, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, SafeAreaView, ScrollView, Alert, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
@@ -26,76 +26,114 @@ export default function SettingsScreen({ navigation }: Props) {
     }, []);
 
     const handleSave = async () => {
+        console.log("Save button pressed"); // 디버깅용 로그
+        
         if (!token || !owner || !repo) {
-            Alert.alert('Error', 'Please fill in all fields');
+            const msg = 'Please fill in all fields';
+            if (Platform.OS === 'web') {
+                window.alert(msg);
+            } else {
+                Alert.alert('Error', msg);
+            }
             return;
         }
 
-        await AsyncStorage.setItem('github_token', token);
-        await AsyncStorage.setItem('github_owner', owner);
-        await AsyncStorage.setItem('github_repo', repo);
+        try {
+            await AsyncStorage.setItem('github_token', token);
+            await AsyncStorage.setItem('github_owner', owner);
+            await AsyncStorage.setItem('github_repo', repo);
 
-        // 로컬 변수 즉시 업데이트
-        await loadSyncConfig();
+            // 로컬 변수 즉시 업데이트
+            await loadSyncConfig();
 
-        Alert.alert('Success', 'GitHub configuration saved successfully!', [
-            { text: 'OK', onPress: () => navigation.goBack() }
-        ]);
+            const successMsg = 'GitHub configuration saved successfully!';
+            if (Platform.OS === 'web') {
+                window.alert(successMsg);
+                navigation.goBack();
+            } else {
+                Alert.alert('Success', successMsg, [
+                    { text: 'OK', onPress: () => navigation.goBack() }
+                ]);
+            }
+        } catch (error) {
+            console.error("Save error:", error);
+            if (Platform.OS === 'web') {
+                window.alert("Failed to save settings.");
+            }
+        }
     };
 
     return (
         <SafeAreaView style={styles.container}>
-            <ScrollView contentContainerStyle={styles.scroll}>
-                <Text style={styles.header}>GitHub Sync Settings</Text>
-                <Text style={styles.description}>
-                    Enter your GitHub Personal Access Token and repository details to enable private cloud sync.
-                </Text>
-
-                <View style={styles.inputGroup}>
-                    <Text style={styles.label}>Personal Access Token (PAT)</Text>
-                    <TextInput
-                        style={styles.input}
-                        placeholder="ghp_xxxxxxxxxxxx"
-                        value={token}
-                        onChangeText={setToken}
-                        secureTextEntry
-                    />
+            <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+                <View style={styles.headerContainer}>
+                    <Text style={styles.header}>GitHub Sync Settings</Text>
+                    <Text style={styles.description}>
+                        Enter your GitHub Personal Access Token and repository details to enable private cloud sync.
+                    </Text>
                 </View>
 
-                <View style={styles.inputGroup}>
-                    <Text style={styles.label}>Repository Owner (GitHub ID)</Text>
-                    <TextInput
-                        style={styles.input}
-                        placeholder="username"
-                        value={owner}
-                        onChangeText={setOwner}
-                        autoCapitalize="none"
-                    />
+                <View style={styles.form}>
+                    <View style={styles.inputGroup}>
+                        <Text style={styles.label}>Personal Access Token (PAT)</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="ghp_xxxxxxxxxxxx"
+                            placeholderTextColor="#adb5bd"
+                            value={token}
+                            onChangeText={setToken}
+                            secureTextEntry
+                            autoCorrect={false}
+                            autoCapitalize="none"
+                        />
+                    </View>
+
+                    <View style={styles.inputGroup}>
+                        <Text style={styles.label}>Repository Owner (GitHub ID)</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="username"
+                            placeholderTextColor="#adb5bd"
+                            value={owner}
+                            onChangeText={setOwner}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                        />
+                    </View>
+
+                    <View style={styles.inputGroup}>
+                        <Text style={styles.label}>Repository Name</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="EpubSyncData"
+                            placeholderTextColor="#adb5bd"
+                            value={repo}
+                            onChangeText={setRepo}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                        />
+                    </View>
+
+                    <TouchableOpacity 
+                        style={styles.saveBtn} 
+                        onPress={handleSave}
+                        activeOpacity={0.8}
+                    >
+                        <Text style={styles.saveBtnText}>Save Configuration</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity 
+                        style={styles.cancelLink} 
+                        onPress={() => navigation.goBack()}
+                    >
+                        <Text style={styles.cancelLinkText}>Cancel</Text>
+                    </TouchableOpacity>
                 </View>
 
-                <View style={styles.inputGroup}>
-                    <Text style={styles.label}>Repository Name</Text>
-                    <TextInput
-                        style={styles.input}
-                        placeholder="EpubSyncData"
-                        value={repo}
-                        onChangeText={setRepo}
-                        autoCapitalize="none"
-                    />
-                </View>
-
-                <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-                    <Text style={styles.saveBtnText}>Save Configuration</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => navigation.goBack()}>
-                    <Text style={styles.cancelBtnText}>Cancel</Text>
-                </TouchableOpacity>
-
-                <View style={styles.infoBox}>
-                    <Text style={styles.infoTitle}>Why do I need this?</Text>
+                <View style={styles.infoFooter}>
                     <Text style={styles.infoText}>
-                        This information allows the app to securely push and pull your reading progress and books from your own PRIVATE GitHub repository. Your data is never shared with anyone else.
+                        Your data is stored securely in your own private repository. 
+                        The app never sees your books unless you sync them.
                     </Text>
                 </View>
             </ScrollView>
@@ -106,76 +144,94 @@ export default function SettingsScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#f8f9fa',
+        backgroundColor: '#FFFFFF',
     },
     scroll: {
-        padding: 20,
+        paddingHorizontal: 24,
+        paddingTop: 40,
+        paddingBottom: 40,
+    },
+    headerContainer: {
+        marginBottom: 32,
     },
     header: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        marginBottom: 10,
-        color: '#212529',
+        fontSize: 28,
+        fontWeight: '800',
+        color: '#1a1a1a',
+        marginBottom: 12,
+        letterSpacing: -0.5,
     },
     description: {
-        fontSize: 14,
-        color: '#6c757d',
-        marginBottom: 30,
-        lineHeight: 20,
+        fontSize: 15,
+        color: '#666',
+        lineHeight: 22,
+        fontWeight: '400',
+    },
+    form: {
+        width: '100%',
     },
     inputGroup: {
-        marginBottom: 20,
+        marginBottom: 24,
     },
     label: {
         fontSize: 14,
         fontWeight: '600',
-        color: '#495057',
-        marginBottom: 8,
+        color: '#444',
+        marginBottom: 10,
+        marginLeft: 2,
     },
     input: {
-        backgroundColor: '#fff',
-        borderWidth: 1,
-        borderColor: '#ced4da',
-        borderRadius: 8,
-        padding: 12,
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1.5,
+        borderColor: '#E1E4E8',
+        borderRadius: 12,
+        paddingHorizontal: 16,
+        paddingVertical: 14,
         fontSize: 16,
+        color: '#1a1a1a',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
+        elevation: 2,
     },
     saveBtn: {
-        backgroundColor: '#007aff',
-        borderRadius: 8,
-        padding: 15,
+        backgroundColor: '#007AFF',
+        borderRadius: 14,
+        paddingVertical: 18,
         alignItems: 'center',
-        marginTop: 10,
+        marginTop: 12,
+        shadowColor: '#007AFF',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 4,
     },
     saveBtnText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
+        color: '#FFFFFF',
+        fontSize: 17,
+        fontWeight: '700',
+        letterSpacing: 0.2,
     },
-    cancelBtn: {
-        padding: 15,
+    cancelLink: {
+        paddingVertical: 20,
         alignItems: 'center',
-        marginTop: 10,
     },
-    cancelBtnText: {
-        color: '#6c757d',
+    cancelLinkText: {
+        color: '#8E8E93',
         fontSize: 16,
+        fontWeight: '500',
     },
-    infoBox: {
-        marginTop: 40,
-        padding: 15,
-        backgroundColor: '#e9ecef',
-        borderRadius: 8,
-    },
-    infoTitle: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        color: '#495057',
-        marginBottom: 5,
+    infoFooter: {
+        marginTop: 20,
+        paddingTop: 30,
+        borderTopWidth: 1,
+        borderTopColor: '#F2F2F7',
     },
     infoText: {
-        fontSize: 12,
-        color: '#6c757d',
+        fontSize: 13,
+        color: '#AEAEB2',
+        textAlign: 'center',
         lineHeight: 18,
     }
 });

@@ -19,7 +19,6 @@ function download(url, dest) {
         const file = fs.createWriteStream(dest);
         https.get(url, function (response) {
             if (response.statusCode === 301 || response.statusCode === 302) {
-                // Handle redirect
                 https.get(response.headers.location, function (redirectResponse) {
                     redirectResponse.pipe(file);
                     file.on('finish', () => file.close(() => resolve()));
@@ -63,8 +62,16 @@ async function buildTemplate() {
   <script>
     window.book = null;
     window.rendition = null;
+    window.lastSelectedCfiRange = null;
+
+    function sendMsg(msg) {
+      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+      else window.parent.postMessage(msg, "*");
+    }
 
     window.initEpub = function(bookUrl, cfi) {
+      console.log("[initEpub] Loading:", bookUrl ? bookUrl.substring(0, 80) : 'N/A');
+
       window.book = ePub(bookUrl);
       window.rendition = window.book.renderTo("viewer", {
         width: "100%",
@@ -77,107 +84,134 @@ async function buildTemplate() {
       window.rendition.themes.register("dark", { "body": { "background": "#121212", "color": "#ffffff" }});
       window.rendition.themes.register("light", { "body": { "background": "#ffffff", "color": "#000000" }});
 
-      if (cfi && cfi !== 'null') {
-         window.rendition.display(cfi);
-      } else {
-         window.rendition.display();
+      // 책 내부 iframe에 스와이프 감지 주입 (epub.js는 내부적으로 nested iframe을 만들기 때문)
+      var swipeStartX = 0;
+      var swipeStartY = 0;
+      function handleSwipeStart(e) {
+        swipeStartX = e.changedTouches[0].screenX;
+        swipeStartY = e.changedTouches[0].screenY;
+      }
+      function handleSwipeEnd(e) {
+        var deltaX = e.changedTouches[0].screenX - swipeStartX;
+        var deltaY = e.changedTouches[0].screenY - swipeStartY;
+        // 수평 스와이프가 확실할 때만 (수직 스크롤과 구분)
+        if (Math.abs(deltaX) > 40 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+          if (deltaX < 0) window.goNext();
+          else window.goPrev();
+        }
       }
 
+      // epub.js 콘텐츠 iframe에 터치 이벤트 심기
+      window.rendition.hooks.content.register(function(contents) {
+        try {
+          contents.document.addEventListener('touchstart', handleSwipeStart, { passive: true });
+          contents.document.addEventListener('touchend', handleSwipeEnd, { passive: true });
+        } catch(e) { console.warn('swipe hook error', e); }
+      });
+
+      // 페이지 위치 변경 이벤트
       window.rendition.on("relocated", function(location) {
-        let progress = 0;
-        let currentLocation = 0;
-        let totalLocations = 0;
-
+        var progress = 0, currentLocation = 0, totalLocations = 0;
         if (window.book.locations && window.book.locations.length() > 0) {
-            progress = window.book.locations.percentageFromCfi(location.start.cfi);
-            currentLocation = location.start.location;
-            totalLocations = window.book.locations.total;
+          progress = window.book.locations.percentageFromCfi(location.start.cfi);
+          currentLocation = location.start.location;
+          totalLocations = window.book.locations.total;
         }
-
-        const msg = JSON.stringify({
+        sendMsg(JSON.stringify({
           type: 'location',
           cfi: location.start.cfi,
           progress: progress,
           currentLocation: currentLocation,
           totalLocations: totalLocations
-        });
-
-        if (window.ReactNativeWebView) {
-            window.ReactNativeWebView.postMessage(msg);
-        } else {
-            window.parent.postMessage(msg, "*");
-        }
+        }));
       });
 
-      // 텍스트 선택(드래그) 이벤트 리스너 캐치
+      // 텍스트 선택 이벤트
       window.rendition.on("selected", function(cfiRange, contents) {
-          window.lastSelectedCfiRange = cfiRange;
-          const msg = JSON.stringify({ type: 'textSelected', cfiRange: cfiRange });
-          if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
-          else window.parent.postMessage(msg, "*");
+        window.lastSelectedCfiRange = cfiRange;
+        sendMsg(JSON.stringify({ type: 'textSelected', cfiRange: cfiRange }));
       });
 
-      window.book.ready.then(() => {
-        // 위치 렌더링에 적절한 값을 넣어 location(페이지 숫자)을 생성합니다.
-        return window.book.locations.generate(1600);
-      }).then((locations) => {
-        const readyMsg = JSON.stringify({
-          type: 'ready',
-          totalLocations: locations.length
-        });
-        if (window.ReactNativeWebView) {
-            window.ReactNativeWebView.postMessage(readyMsg);
+      // 책 로드 완료 이벤트
+      window.book.ready.then(function() {
+        // 페이지 표시
+        if (cfi && cfi !== 'null' && cfi !== '') {
+          window.rendition.display(cfi);
         } else {
-            window.parent.postMessage(readyMsg, "*");
+          window.rendition.display();
         }
+
+        // TOC 전송
+        window.book.loaded.navigation.then(function(nav) {
+          var toc = nav.toc.map(function(item) { return { label: item.label, href: item.href }; });
+          sendMsg(JSON.stringify({ type: 'toc', toc: toc }));
+        });
+
+        // ready 신호 즉시 전송 (로딩 스피너 제거)
+        sendMsg(JSON.stringify({ type: 'ready', totalLocations: 0 }));
+
+        // 위치 데이터는 백그라운드에서 생성
+        window.book.locations.generate(1600).then(function(locations) {
+          sendMsg(JSON.stringify({ type: 'ready', totalLocations: locations.length }));
+        });
+      }).catch(function(err) {
+        console.error("[initEpub] Error:", err);
+        sendMsg(JSON.stringify({ type: 'error', message: 'Failed to load book: ' + err.message }));
       });
+    };
+
+    window.jumpTo = function(href) {
+      if (window.rendition) window.rendition.display(href);
     };
 
     window.addHighlight = function(color) {
-        if (window.lastSelectedCfiRange) {
-            window.rendition.annotations.highlight(window.lastSelectedCfiRange, {}, (e) => {
-                console.log("highlight clicked", e);
-            });
-            
-            // React Native 앱 쪽으로 하이라이트 정보 전송 (Memo 연동용)
-            const msg = JSON.stringify({
-                type: 'annotation',
-                action: 'highlight',
-                cfiRange: window.lastSelectedCfiRange,
-                color: color || 'yellow'
-            });
-            if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
-            else window.parent.postMessage(msg, "*");
-
-            // 선택 해제
-            const contents = window.rendition.getContents();
-            if(contents && contents.length > 0) {
-                const selection = contents[0].window.getSelection();
-                if(selection && selection.removeAllRanges) selection.removeAllRanges();
-            }
-            window.lastSelectedCfiRange = null;
+      if (window.lastSelectedCfiRange) {
+        window.rendition.annotations.highlight(window.lastSelectedCfiRange, {}, function(e) {
+          console.log("highlight clicked", e);
+        });
+        sendMsg(JSON.stringify({
+          type: 'annotation',
+          action: 'highlight',
+          cfiRange: window.lastSelectedCfiRange,
+          color: color || 'yellow'
+        }));
+        var contents = window.rendition.getContents();
+        if (contents && contents.length > 0) {
+          var selection = contents[0].window.getSelection();
+          if (selection && selection.removeAllRanges) selection.removeAllRanges();
         }
+        window.lastSelectedCfiRange = null;
+      }
     };
 
     window.changeTheme = function(theme) {
-       if (window.rendition) {
-          window.rendition.themes.select(theme);
-       }
+      if (window.rendition) window.rendition.themes.select(theme);
     };
 
     window.changeFontSize = function(size) {
-       if (window.rendition) {
-          window.rendition.themes.fontSize(size + "%");
-       }
+      if (window.rendition) window.rendition.themes.fontSize(size + "%");
     };
 
     window.goNext = function() {
-       if (window.rendition) window.rendition.next();
+      if (window.rendition) window.rendition.next();
     };
 
     window.goPrev = function() {
-       if (window.rendition) window.rendition.prev();
+      if (window.rendition) window.rendition.prev();
     };
+
+    // 모바일 스와이프 지원
+    var touchStartX = 0, touchEndX = 0;
+    var minSwipeDistance = 50;
+    document.addEventListener('touchstart', function(e) { touchStartX = e.changedTouches[0].screenX; }, false);
+    document.addEventListener('touchend', function(e) {
+      touchEndX = e.changedTouches[0].screenX;
+      var deltaX = touchEndX - touchStartX;
+      if (Math.abs(deltaX) > minSwipeDistance) {
+        if (deltaX < 0) window.goNext();
+        else window.goPrev();
+      }
+    }, false);
   </script>
 </body>
 </html>`;

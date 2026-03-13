@@ -21,17 +21,29 @@ export async function loadSyncConfig() {
     return !!(GITHUB_TOKEN && REPO_OWNER && REPO_NAME);
 }
 
+export function getGithubToken() {
+    return GITHUB_TOKEN;
+}
+
 const getBaseUrl = () => `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
 
-const getHeaders = () => ({
+export const getHeaders = () => ({
     Authorization: `token ${GITHUB_TOKEN}`,
     Accept: 'application/vnd.github.v3+json',
+});
+
+export const getAuthHeader = () => ({
+    Authorization: `token ${GITHUB_TOKEN}`,
 });
 
 export interface SyncData {
     version: string;
     last_synced_at: string;
     books: Record<string, BookData>;
+    stats?: {
+        total_reading_minutes: number;
+        daily_stats: Record<string, number>; // "YYYY-MM-DD": minutes
+    };
 }
 
 export interface BookData {
@@ -58,27 +70,41 @@ let cachedSha: string | null = null;
 /**
  * 1. 앱 구동 시 GitHub의 /books 디렉토리 내 폴더 리스팅 혹은 책 파일 리스트업
  */
-export async function fetchBooksList(): Promise<any[]> {
+export async function fetchBooksList(): Promise<{ success: boolean; books: any[]; error?: string }> {
     try {
-        const response = await fetch(`${getBaseUrl()}/contents/books`, {
+        if (!GITHUB_TOKEN) return { success: false, books: [], error: 'No token' };
+
+        // 1. Try /books directory
+        let response = await fetch(`${getBaseUrl()}/contents/books`, {
             method: 'GET',
             headers: getHeaders(),
         });
 
+        // 2. If 404, try root directory
         if (response.status === 404) {
-            console.warn('Books directory not found. Please upload epub files to the /books folder.');
-            return [];
+            console.log('/books folder not found, trying root...');
+            response = await fetch(`${getBaseUrl()}/contents`, {
+                method: 'GET',
+                headers: getHeaders(),
+            });
+        }
+
+        if (response.status === 401) {
+            return { success: false, books: [], error: 'Invalid GitHub Token (Unauthorized)' };
         }
 
         if (!response.ok) {
-            throw new Error(`Failed to fetch books: ${response.status}`);
+            return { success: false, books: [], error: `GitHub error: ${response.status}` };
         }
 
         const files = await response.json();
-        return files.filter((file: any) => file.name.endsWith('.epub'));
-    } catch (error) {
+        if (!Array.isArray(files)) return { success: true, books: [] };
+
+        const books = files.filter((file: any) => file.name.toLowerCase().endsWith('.epub'));
+        return { success: true, books };
+    } catch (error: any) {
         console.error('Error fetching books list from GitHub:', error);
-        return [];
+        return { success: false, books: [], error: error.message };
     }
 }
 
@@ -158,18 +184,28 @@ export async function pushSyncData(newData: SyncData): Promise<string | null> {
 /**
  * 4. 특정 책의 읽은 위치를 업데이트하고 GitHub에 예약/바로 푸시
  */
-export async function updateBookProgress(title: string, cfi: string) {
-    if (!cachedSyncData) return;
+export async function updateBookProgress(title: string, cfi: string, bookUrl?: string) {
+    if (!cachedSyncData) {
+        // Initialize if not exists
+        cachedSyncData = {
+            version: '1.0',
+            last_synced_at: new Date().toISOString(),
+            books: {}
+        };
+    }
 
-    // 제목으로 책 찾기 (더 정밀하게는 id를 쓰는 것이 좋지만, 파일명 베이스로 탐색)
-    const bookKey = Object.keys(cachedSyncData.books).find(k => cachedSyncData!.books[k].title === title);
+    // 제목으로 책 찾기 (파일 확장자 제외하고 비교하거나 포함해서 비교)
+    let bookKey = Object.keys(cachedSyncData.books).find(k => 
+        cachedSyncData!.books[k].title === title || 
+        cachedSyncData!.books[k].file_path.includes(title)
+    );
 
     // 만약 데이터에 없는 새 책이라면 새로 추가
     if (!bookKey) {
-        const dummyKey = `book_${Date.now()}`;
-        cachedSyncData.books[dummyKey] = {
+        bookKey = `book_${Date.now()}`;
+        cachedSyncData.books[bookKey] = {
             title: title,
-            file_path: `books/${title}.epub`,
+            file_path: `books/${title}`,
             last_read_position: cfi,
             position_updated_at: new Date().toISOString()
         };
@@ -179,6 +215,18 @@ export async function updateBookProgress(title: string, cfi: string) {
     }
 
     cachedSyncData.last_synced_at = new Date().toISOString();
+
+    // 마지막으로 읽은 책 정보를 AsyncStorage에 저장 (앙프 시작 시 자동 열기용)
+    try {
+        await AsyncStorage.setItem('last_read_book', JSON.stringify({
+            title,
+            bookUrl: bookUrl || '',
+            cfi,
+            timestamp: new Date().toISOString()
+        }));
+    } catch (e) {
+        console.warn('Failed to save last read book info', e);
+    }
 
     // 서버로 전송
     await pushSyncData(cachedSyncData);
@@ -208,12 +256,36 @@ export async function addAnnotation(title: string, annotation: Annotation) {
 export async function initializeGitHubSync() {
     console.log('--- Initializing GitHub Sync ... ---');
 
-    const booksOnCloud = await fetchBooksList();
+    const result = await fetchBooksList();
+    const booksOnCloud = result.books;
     console.log('총 발견된 책(EPUB):', booksOnCloud.length, '권');
 
     const { data: syncData, sha: currentSha } = await fetchSyncData();
 
-    return { syncData, currentSha, booksOnCloud };
+    // Stats 초기화
+    if (syncData && !syncData.stats) {
+        syncData.stats = { total_reading_minutes: 0, daily_stats: {} };
+    }
+
+    return { syncData, currentSha, booksOnCloud, error: result.error };
+}
+
+/**
+ * 7. 독서 통계 업데이트
+ */
+export async function updateReadingStats(minutesToAdd: number) {
+    if (!cachedSyncData) return;
+
+    if (!cachedSyncData.stats) {
+        cachedSyncData.stats = { total_reading_minutes: 0, daily_stats: {} };
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    cachedSyncData.stats.total_reading_minutes += minutesToAdd;
+    cachedSyncData.stats.daily_stats[today] = (cachedSyncData.stats.daily_stats[today] || 0) + minutesToAdd;
+    
+    cachedSyncData.last_synced_at = new Date().toISOString();
+    await pushSyncData(cachedSyncData);
 }
 
 /**

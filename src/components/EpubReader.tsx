@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useImperativeHandle, forwardRef } from 'react';
-import { View, StyleSheet, ActivityIndicator, Platform } from 'react-native';
+import { View, StyleSheet, ActivityIndicator, Platform, Text, GestureResponderEvent } from 'react-native';
 import { EPUB_TEMPLATE } from './EpubTemplate';
 
 let WebView: any = null;
@@ -10,6 +10,7 @@ if (Platform.OS !== 'web') {
 export interface EpubReaderRef {
     goNext: () => void;
     goPrev: () => void;
+    jumpTo: (href: string) => void;
     changeTheme: (theme: 'light' | 'dark') => void;
     changeFontSize: (size: number) => void;
     addHighlight: (color: string) => void;
@@ -22,15 +23,21 @@ export interface EpubLocationData {
     totalLocations: number;
 }
 
+export interface TocItem {
+    label: string;
+    href: string;
+}
+
 interface EpubReaderProps {
     bookUrl: string;
     initialCfi?: string | null;
     onLocationChange?: (location: EpubLocationData) => void;
     onTextSelected?: (cfiRange: string) => void;
     onAnnotation?: (data: any) => void;
+    onToc?: (toc: TocItem[]) => void;
     onReady?: (totalLocations: number) => void;
     theme?: 'light' | 'dark';
-    fontSize?: number; // percentage, e.g., 100
+    fontSize?: number;
 }
 
 const EpubReader = forwardRef<EpubReaderRef, EpubReaderProps>(({
@@ -39,6 +46,7 @@ const EpubReader = forwardRef<EpubReaderRef, EpubReaderProps>(({
     onLocationChange,
     onTextSelected,
     onAnnotation,
+    onToc,
     onReady,
     theme = 'light',
     fontSize = 100
@@ -47,13 +55,18 @@ const EpubReader = forwardRef<EpubReaderRef, EpubReaderProps>(({
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const [loading, setLoading] = useState(true);
     const [isReady, setIsReady] = useState(false);
+    const [debugError, setDebugError] = useState<string | null>(null);
+
+    // 스와이프를 위한 터치 추적
+    const touchStartX = useRef<number>(0);
+    const touchStartY = useRef<number>(0);
+    const touchStartTime = useRef<number>(0);
 
     const isWeb = Platform.OS === 'web';
 
     const executeScript = (script: string) => {
         if (isWeb) {
             try {
-                // Ignore type error for contentWindow eval on web
                 (iframeRef.current?.contentWindow as any)?.eval(script);
             } catch (e) { console.error('iframe eval error', e) }
         } else {
@@ -65,18 +78,33 @@ const EpubReader = forwardRef<EpubReaderRef, EpubReaderProps>(({
     useImperativeHandle(ref, () => ({
         goNext: () => executeScript(`window.goNext()`),
         goPrev: () => executeScript(`window.goPrev()`),
+        jumpTo: (href: string) => executeScript(`window.jumpTo("${href}")`),
         changeTheme: (newTheme) => executeScript(`window.changeTheme("${newTheme}")`),
         changeFontSize: (newSize) => executeScript(`window.changeFontSize(${newSize})`),
         addHighlight: (color: string) => executeScript(`window.addHighlight("${color}")`),
     }));
 
-    // Update theme and font size when props change, but only if webview is ready
+    // 테마/폰트 변경: isReady 조건 없이 항상 시도 (나이트모드 버그 수정)
     useEffect(() => {
         if (isReady) {
-            executeScript(`window.changeTheme("${theme}");`);
+            // 나이트모드 즉시 적용
+            executeScript(`
+                if (typeof window.changeTheme === 'function') {
+                    window.changeTheme("${theme}");
+                } else {
+                    // fallback: 직접 CSS 적용
+                    document.body.style.background = "${theme === 'dark' ? '#1a1a2e' : '#ffffff'}";
+                    document.body.style.color = "${theme === 'dark' ? '#e8e8e8' : '#000000'}";
+                }
+            `);
+        }
+    }, [theme, isReady]);
+
+    useEffect(() => {
+        if (isReady) {
             executeScript(`window.changeFontSize(${fontSize});`);
         }
-    }, [theme, fontSize, isReady]);
+    }, [fontSize, isReady]);
 
     const processMessageData = (dataStr: string) => {
         try {
@@ -96,6 +124,8 @@ const EpubReader = forwardRef<EpubReaderRef, EpubReaderProps>(({
                 onTextSelected(data.cfiRange);
             } else if (data.type === 'annotation' && onAnnotation) {
                 onAnnotation(data);
+            } else if (data.type === 'toc' && onToc) {
+                onToc(data.toc);
             }
         } catch (e) {
             // Ignore non-json or external messages
@@ -118,15 +148,53 @@ const EpubReader = forwardRef<EpubReaderRef, EpubReaderProps>(({
         return () => window.removeEventListener('message', handleMsg);
     }, [isWeb, onLocationChange, onReady]);
 
-    const onLoadEnd = () => {
-        // When webview/iframe is loaded, inject the initialization script
+    // 8초 후에도 ready가 안 오면 디버그 정보 표시
+    useEffect(() => {
         if (!isReady) {
-            executeScript(`window.initEpub("${bookUrl}", "${initialCfi || ''}")`);
+            const t = setTimeout(() => {
+                setDebugError(`URL: ${bookUrl ? bookUrl.substring(0, 120) : 'null'}`);
+            }, 8000);
+            return () => clearTimeout(t);
+        }
+    }, [bookUrl, isReady]);
+
+    const onLoadEnd = () => {
+        if (!isReady) {
+            const script = `window.initEpub(${JSON.stringify(bookUrl)}, ${JSON.stringify(initialCfi || '')})`;
+            executeScript(script);
+        }
+    };
+
+    // 네이티브 터치로 스와이프 처리 (PanGestureHandler 대신)
+    const handleTouchStart = (e: GestureResponderEvent) => {
+        touchStartX.current = e.nativeEvent.pageX;
+        touchStartY.current = e.nativeEvent.pageY;
+        touchStartTime.current = Date.now();
+    };
+
+    const handleTouchEnd = (e: GestureResponderEvent) => {
+        const dx = e.nativeEvent.pageX - touchStartX.current;
+        const dy = e.nativeEvent.pageY - touchStartY.current;
+        const dt = Date.now() - touchStartTime.current;
+
+        // 빠른 수평 스와이프만 인식: 세로보다 가로 거리가 2배 이상, 400ms 이내
+        if (Math.abs(dx) > Math.abs(dy) * 1.5 && Math.abs(dx) > 40 && dt < 400) {
+            if (dx < 0) {
+                // 왼쪽 스와이프 → 다음 페이지
+                executeScript(`window.goNext()`);
+            } else {
+                // 오른쪽 스와이프 → 이전 페이지
+                executeScript(`window.goPrev()`);
+            }
         }
     };
 
     return (
-        <View style={styles.container}>
+        <View
+            style={styles.container}
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+        >
             {isWeb ? (
                 <iframe
                     ref={iframeRef as any}
@@ -156,6 +224,11 @@ const EpubReader = forwardRef<EpubReaderRef, EpubReaderProps>(({
             {loading && (
                 <View style={styles.loadingOverlay}>
                     <ActivityIndicator size="large" color="#000" />
+                    {debugError && (
+                        <Text style={{color: 'red', fontSize: 10, padding: 10, textAlign: 'center'}}>
+                            {debugError}
+                        </Text>
+                    )}
                 </View>
             )}
         </View>
