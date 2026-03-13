@@ -29,6 +29,9 @@
       "display": "standalone",
       "themeColor": "#007aff",
       "backgroundColor": "#ffffff"
+    },
+    "experiments": {
+      "baseUrl": "/EpubSyncData"
     }
   }
 }
