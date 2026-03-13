@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_synced_at": "2026-03-13T02:29:46.227Z",
+  "last_synced_at": "2026-03-13T02:29:56.783Z",
   "books": {
     "book_hash_identifier123": {
       "title": "_OceanofPDF.com_The_Greatest_Scientific_Gamble_-_Michael_Joseloff",
@@ -12,7 +12,14 @@
       "title": "The_Greatest_Scientific_Gamble_-_Michael_Joseloff.epub",
       "file_path": "books/The_Greatest_Scientific_Gamble_-_Michael_Joseloff.epub.epub",
       "last_read_position": "epubcfi(/6/2!/4/4/2/2/2/1:0)",
-      "position_updated_at": "2026-03-13T02:29:46.227Z"
+      "position_updated_at": "2026-03-13T02:29:46.227Z",
+      "annotations": [
+        {
+          "type": "bookmark",
+          "cfi": "epubcfi(/6/2!/4/4/2/2/2/1:0)",
+          "created_at": "2026-03-13T02:29:56.783Z"
+        }
+      ]
     }
   }
 }
