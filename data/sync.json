@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_synced_at": "2026-03-15T02:29:16.469Z",
+  "last_synced_at": "2026-03-15T06:11:37.610Z",
   "books": {
     "book_hash_identifier123": {
       "title": "_OceanofPDF.com_The_Greatest_Scientific_Gamble_-_Michael_Joseloff",
@@ -47,10 +47,10 @@
     }
   },
   "stats": {
-    "total_reading_minutes": 126,
+    "total_reading_minutes": 348,
     "daily_stats": {
       "2026-03-13": 119,
-      "2026-03-15": 7
+      "2026-03-15": 229
     }
   }
 }
